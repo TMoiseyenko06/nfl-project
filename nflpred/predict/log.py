@@ -38,9 +38,18 @@ def _pred_fields() -> list[str]:
 PRED_FIELDS = _pred_fields()
 
 
-def _row_hash(row: pd.Series) -> str:
+def _row_hash(row: pd.Series, fields: list[str] | None = None) -> str:
+    """Content hash over an explicit field list.
+
+    The field list is stored alongside the hash (``hash_fields``) because the
+    set of logged columns grows as targets are added. Without that, adding a
+    column silently invalidates every previously written row, and the integrity
+    check reports tampering that never happened - which is worse than no check
+    at all, since it trains you to ignore it.
+    """
+    fields = fields if fields is not None else PRED_FIELDS
     parts = []
-    for f in PRED_FIELDS:
+    for f in fields:
         v = row.get(f)
         if isinstance(v, float) and np.isfinite(v):
             parts.append(f"{f}={v:.10g}")
@@ -65,7 +74,9 @@ def append_predictions(preds: pd.DataFrame, path: str | Path, vintage: str = "un
         if f not in new.columns:
             new[f] = np.nan
     new = new[PRED_FIELDS]
+    fields_tag = ",".join(PRED_FIELDS)
     new["row_hash"] = new.apply(_row_hash, axis=1)
+    new["hash_fields"] = fields_tag
 
     if path.exists():
         existing = pd.read_csv(path)
@@ -87,16 +98,49 @@ def append_predictions(preds: pd.DataFrame, path: str | Path, vintage: str = "un
 
 
 def verify_log(path: str | Path) -> pd.DataFrame:
-    """Recompute each row's hash and return any rows that were edited after logging."""
+    """Rows whose content no longer matches the hash written with them.
+
+    Each row is checked against the field list it was written with, so adding
+    a new prediction column does not retroactively invalidate old rows. A row
+    written before ``hash_fields`` existed is verified against the field list
+    implied by the columns present at the time; if that cannot be
+    reconstructed it is reported as unverifiable, not as tampered.
+    """
     path = Path(path)
     if not path.exists():
         return pd.DataFrame()
     df = pd.read_csv(path)
     if "row_hash" not in df.columns:
         return df.assign(reason="no hash column")
-    recomputed = df.apply(_row_hash, axis=1)
-    bad = df[recomputed != df["row_hash"]]
-    return bad
+
+    bad_rows, unverifiable = [], []
+    have_fields = "hash_fields" in df.columns
+    for i, row in df.iterrows():
+        tag = row.get("hash_fields") if have_fields else None
+        if isinstance(tag, str) and tag:
+            fields = tag.split(",")
+        else:
+            # Legacy row. Try the current schema, then the columns actually
+            # present, before concluding anything.
+            fields = None
+            for cand in (PRED_FIELDS, [c for c in PRED_FIELDS if pd.notna(row.get(c))]):
+                if _row_hash(row, cand) == row["row_hash"]:
+                    fields = cand
+                    break
+            if fields is None:
+                unverifiable.append(i)
+                continue
+        if _row_hash(row, fields) != row["row_hash"]:
+            bad_rows.append(i)
+
+    out = df.loc[bad_rows].copy()
+    if len(out):
+        out["reason"] = "content does not match its hash"
+    if unverifiable:
+        legacy = df.loc[unverifiable].copy()
+        legacy["reason"] = "written before hash_fields; schema not reconstructible"
+        out = pd.concat([out, legacy], ignore_index=True)
+    return out
 
 
 def logged_predictions_before_kickoff(path: str | Path) -> pd.DataFrame:

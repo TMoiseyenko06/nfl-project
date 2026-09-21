@@ -160,3 +160,40 @@ def test_upcoming_games_raises_when_season_is_over():
 
     with pytest.raises(RuntimeError, match="no upcoming games"):
         upcoming_games(_schedule(), now=pd.Timestamp("2027-01-01"))
+
+
+def test_adding_a_prediction_column_does_not_invalidate_old_rows(tmp_path, sample):
+    """Regression: the hash is computed over a field list that grows as targets
+    are added. Without recording which fields a row was hashed with, adding a
+    column retroactively flags every existing row as tampered - a false alarm
+    that trains you to ignore the check."""
+    import nflpred.predict.log as logmod
+
+    p = tmp_path / "log.csv"
+    append_predictions(sample, p, vintage="v1")
+    assert verify_log(p).empty
+
+    original = list(logmod.PRED_FIELDS)
+    try:
+        # Simulate adding a new target's prediction column.
+        logmod.PRED_FIELDS = original + ["pred_new_target"]
+        flagged = verify_log(p)
+        assert flagged.empty, (
+            "adding a prediction column falsely flagged existing rows: "
+            f"{len(flagged)} row(s)"
+        )
+        # A genuine edit must still be caught under the new schema.
+        df = pd.read_csv(p)
+        df.loc[0, "p_home"] = 0.123
+        df.to_csv(p, index=False)
+        assert len(verify_log(p)) == 1, "a real edit went undetected after a schema change"
+    finally:
+        logmod.PRED_FIELDS = original
+
+
+def test_hash_fields_is_recorded_with_each_row(tmp_path, sample):
+    p = tmp_path / "log.csv"
+    append_predictions(sample, p, vintage="v1")
+    df = pd.read_csv(p)
+    assert "hash_fields" in df.columns
+    assert df["hash_fields"].str.contains("p_home").all()
