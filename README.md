@@ -593,6 +593,67 @@ no single result here should be treated as established.
 
 ---
 
+## Quarterback features and the ensemble
+
+Full walk-forward, 2,525 games, identical folds.
+
+| model | win acc | log loss | Brier | spread MAE |
+|---|---|---|---|---|
+| elo | .6393 | .6353 | .2222 | 10.283 |
+| lean (6 feats) | .6456 | .6324 | .2210 | 10.224 |
+| **lean_qb (8 feats)** | .6496 | **.6281** | **.2191** | **10.188** |
+| linear_qb | .6488 | .6348 | .2205 | 10.309 |
+| neural + qb | **.6520** | .6411 | .2235 | 10.279 |
+| ensemble | .6516 | .6289 | .2194 | 10.196 |
+| *vegas* | *.6659* | *.6076* | *.2101* | *9.875* |
+
+**`lean_qb` is the production default**: best non-market model on log loss,
+Brier and spread MAE, using eight features.
+
+### The QB result, and a correction
+
+Quarterback change carries obvious raw signal — starters change in 11.3% of
+team-games, and those teams average **−3.05 margin versus +0.43** otherwise, a
+3.5-point swing. `d_qb_epa_ewma` correlates +0.282 with home margin, second
+only to Elo.
+
+On a 600-game holdout, adding QB features made the lean model **worse**
+(.6369 → .6317), and I reported that it looked redundant with team EPA. **Over
+the full 2,525 games that reversed**: every model family improved with QB
+features, and `lean` → `lean_qb` gained accuracy, log loss and Brier together.
+The holdout was too small to judge, which is the same lesson this project keeps
+teaching.
+
+**But the gain is not individually significant.** Paired McNemar against `lean`:
+
+| model | accuracy gain | p |
+|---|---|---|
+| lean_qb | +0.0040 | 0.46 |
+| linear_qb | +0.0032 | 0.71 |
+| neural + qb | +0.0064 | 0.43 |
+| ensemble | +0.0060 | 0.28 |
+
+All four positive, none significant. The consistent direction and the
+calibration improvement (log loss .6324 → .6281) are more persuasive than any
+single p-value, but "probably a small real gain" is the honest claim, not
+"proven".
+
+### Encode change, not identity
+
+The earlier `neural_qb` used learned QB-identity embeddings and made every
+metric worse. With ~3,000 games and hundreds of quarterbacks, most embeddings
+are fit on a handful of starts and become noise. Five continuous features —
+rolling EPA, prior starts, starter-changed flag, inexperience flag, and quality
+relative to the team's usual starter — work where a large vocabulary did not.
+
+### Ensemble
+
+`EnsembleModel` averages members in **log-odds space**, so a member saying 95%
+does not overwhelm one saying 55%. It lands second on nearly every metric
+without being best at any — which is exactly what a good ensemble looks like.
+
+---
+
 ## What I'd do next, and what I'm skeptical of
 
 ### Next

@@ -195,7 +195,9 @@ def main(argv: list[str] | None = None) -> int:
     sp = sub.add_parser("predict-week", help="predict a week and log it")
     sp.add_argument("--season", type=int)
     sp.add_argument("--week", type=int)
-    sp.add_argument("--model", default="lightgbm_plus_vegas", help="model to display")
+    sp.add_argument("--model", default="lean_qb",
+                    help="model to display (default: lean_qb, the best non-market "
+                         "model on log loss, Brier and spread MAE)")
     sp.add_argument("--no-log", action="store_true", help="print without writing the log")
     sp.set_defaults(func=cmd_predict_week)
 
