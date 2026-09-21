@@ -248,6 +248,20 @@ TARGET_COLS = [
 ]
 
 
+# The lean feature set. Six features that matched or beat the full eighty in
+# the overfitting audit (tools/overfit_audit.py). One term each for: team
+# strength, opponent-adjusted quality, recent efficiency, rest, expected
+# scoring, and recent margin. At ~3,000 games, more than this fits noise.
+LEAN_FEATURES = [
+    "elo_diff",
+    "d_adj_off_epa_play_net",
+    "d_net_epa_ewma",
+    "d_rest_days",
+    "s_expected_total",
+    "d_margin_r5",
+]
+
+
 def feature_groups(df: pd.DataFrame) -> dict[str, list[str]]:
     """Named column groups so models and ablations can select without hardcoding."""
     cols = list(df.columns)
@@ -264,6 +278,7 @@ def feature_groups(df: pd.DataFrame) -> dict[str, list[str]]:
         # how much scoring a game will contain, as opposed to who wins it.
         "totals": [c for c in cols if c.startswith("s_")],
         "vegas": [c for c in cols if c.startswith("vegas_")],
+        "lean": [c for c in LEAN_FEATURES if c in cols],
     }
 
 

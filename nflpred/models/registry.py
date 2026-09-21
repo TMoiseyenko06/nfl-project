@@ -408,6 +408,10 @@ def default_phase1_models(cfg, targets: list[str] | None = None) -> list[BaseMod
     gbm = dict(params=cfg.get("models.lightgbm"), seed=seed)
     return [
         HomeTeamBaseline(targets),
+        # Six features. Matched or beat the full set in the overfitting audit,
+        # and has the smallest train/test gap of anything here. Production default.
+        LinearModel(**lin, groups=["lean"], name="lean", targets=targets,
+                    derive_binary_from_margin=True),
         EloBaseline(targets),
         VegasBaseline(targets),
         LinearModel(**lin, groups=core, targets=targets),
