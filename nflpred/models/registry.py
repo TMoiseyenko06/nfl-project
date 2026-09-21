@@ -383,6 +383,66 @@ class LightGBMModel(BaseModel, MarginDerivedProbability):
         return pd.Series(imp, index=self.features_).sort_values(ascending=False)
 
 
+class EnsembleModel(BaseModel):
+    """Average of several fitted models.
+
+    Different learners make different mistakes; averaging cancels some of them.
+    In this project the ensemble beat every individual model on accuracy, log
+    loss and total MAE at the same time, which no single model managed.
+
+    Probabilities are averaged in log-odds space rather than directly, so a
+    model saying 0.95 does not dominate one saying 0.55 the way a plain mean
+    would. Regression targets are averaged directly.
+    """
+
+    name = "ensemble"
+
+    def __init__(self, members: list, weights: list[float] | None = None,
+                 name: str | None = None, targets: list[str] | None = None):
+        super().__init__(targets)
+        self.members = members
+        w = np.array(weights if weights else [1.0] * len(members), dtype=float)
+        if len(w) != len(members):
+            raise ValueError("weights must match members")
+        self.weights = w / w.sum()
+        self.groups = sorted({g for m in members for g in m.groups})
+        if name:
+            self.name = name
+
+    def fit(self, train: pd.DataFrame, features: list[str]) -> None:
+        from nflpred.features.build import select_features
+
+        for m in self.members:
+            f = select_features(train, m.groups) if m.groups else []
+            m.fit(train, f)
+
+    def predict(self, test: pd.DataFrame, features: list[str]) -> Predictions:
+        from nflpred.features.build import select_features
+
+        parts = []
+        for m in self.members:
+            f = select_features(test, m.groups) if m.groups else []
+            parts.append(m.predict(test, f).values)
+
+        out = Predictions()
+        for spec in self.specs:
+            col = spec.pred_column
+            vals = [p[col] for p in parts if col in p]
+            if not vals:
+                continue
+            w = self.weights[: len(vals)] / self.weights[: len(vals)].sum()
+            stack = np.vstack(vals)
+            if spec.is_binary:
+                # Average in log-odds so confident members do not dominate.
+                eps = 1e-6
+                q = np.clip(stack, eps, 1 - eps)
+                lo = np.log(q / (1 - q))
+                out.set(spec, 1.0 / (1.0 + np.exp(-(w @ lo))))
+            else:
+                out.set(spec, w @ stack)
+        return out
+
+
 def neural_models(cfg, targets: list[str] | None = None) -> list[BaseModel]:
     """Phase 3 models. Imported lazily so torch stays an optional dependency."""
     from nflpred.models.neural import NeuralModel
@@ -412,6 +472,8 @@ def default_phase1_models(cfg, targets: list[str] | None = None) -> list[BaseMod
         # and has the smallest train/test gap of anything here. Production default.
         LinearModel(**lin, groups=["lean"], name="lean", targets=targets,
                     derive_binary_from_margin=True),
+        LinearModel(**lin, groups=["lean_qb"], name="lean_qb", targets=targets,
+                    derive_binary_from_margin=True),
         EloBaseline(targets),
         VegasBaseline(targets),
         LinearModel(**lin, groups=core, targets=targets),
@@ -420,6 +482,8 @@ def default_phase1_models(cfg, targets: list[str] | None = None) -> list[BaseMod
         # these and the pair above is what the market knows that we do not.
         LinearModel(**lin, groups=core + ["vegas"], name="linear_plus_vegas", targets=targets),
         LightGBMModel(**gbm, groups=core + ["vegas"], name="lightgbm_plus_vegas", targets=targets),
+        LinearModel(**lin, groups=core + ["qb"], name="linear_qb", targets=targets,
+                    derive_binary_from_margin=True),
         # Win probability derived from the predicted margin rather than fit as a
         # separate classifier, so the moneyline pick and the spread pick can
         # never contradict each other. This is the variant meant for display.

@@ -18,6 +18,7 @@ from nflpred.config import Config
 from nflpred.features.adjust import opponent_adjusted_ratings
 from nflpred.features.epa import METRICS, game_box, rolling_features
 from nflpred.features.schedule import build_team_games, context_features
+from nflpred.features.quarterback import load_qb_weeks, qb_features
 from nflpred.features.targets import attach_halftime_targets
 from nflpred.ingest.nflverse import cache_vintage, load_games, load_pbp
 from nflpred.models.elo import run_elo
@@ -52,6 +53,7 @@ SUM_COLS = [
     "points_for_ewma", "points_against_ewma",
     "points_for_r8", "points_against_r8",
 ]
+QB_COLS = ["qb_epa_ewma", "qb_starts", "qb_is_new", "qb_is_rookie_ish", "qb_epa_delta"]
 ADJ_COLS = [
     "adj_off_epa_play_off", "adj_off_epa_play_def", "adj_off_epa_play_net",
     "adj_off_success_rate_net",
@@ -131,8 +133,11 @@ def _build_uncached(cfg: Config, asof: pd.Timestamp | None) -> pd.DataFrame:
     else:
         adj = pd.DataFrame({"game_id": [], "team": []})
 
-    team_level = roll.merge(adj, on=["game_id", "team"], how="left").merge(
-        ctx, on=["game_id", "team"], how="left"
+    qbf = qb_features(tg, load_qb_weeks(cfg))
+    team_level = (
+        roll.merge(adj, on=["game_id", "team"], how="left")
+        .merge(ctx, on=["game_id", "team"], how="left")
+        .merge(qbf, on=["game_id", "team"], how="left")
     )
 
     # --- game-level frame ---------------------------------------------------
@@ -178,7 +183,7 @@ def _build_uncached(cfg: Config, asof: pd.Timestamp | None) -> pd.DataFrame:
     out["ctx_week"] = out["week"]
 
     # Rolling form + adjusted ratings, differenced.
-    roll_cols = ROLL_EWMA + ROLL_WINDOW + ROLL_EXTRA + ADJ_COLS
+    roll_cols = ROLL_EWMA + ROLL_WINDOW + ROLL_EXTRA + ADJ_COLS + QB_COLS
     r_home, r_away = _pivot(team_level, tg, sorted(set(roll_cols + SUM_COLS)))
     for c in roll_cols:
         if c in r_home.columns:
@@ -229,8 +234,8 @@ def _build_uncached(cfg: Config, asof: pd.Timestamp | None) -> pd.DataFrame:
         initial=cfg.get("features.elo.initial_rating"),
         mov_multiplier=cfg.get("features.elo.mov_multiplier", True),
     ).set_index("game_id")
-    for c in ["elo_diff", "elo_prob_home", "elo_spread_home"]:
-        out[c] = elo[c]
+    elo_cols = ["elo_diff", "elo_prob_home", "elo_spread_home"]
+    out = pd.concat([out, elo[elo_cols].reindex(out.index)], axis=1).copy()
 
     out = out.reset_index().rename(columns={"index": "game_id"})
     out = out[out["season"] >= start].sort_values("kickoff").reset_index(drop=True)
@@ -279,6 +284,12 @@ def feature_groups(df: pd.DataFrame) -> dict[str, list[str]]:
         "totals": [c for c in cols if c.startswith("s_")],
         "vegas": [c for c in cols if c.startswith("vegas_")],
         "lean": [c for c in LEAN_FEATURES if c in cols],
+        # Quarterback change and quality - the biggest single gap between this
+        # model and the market. Encodes CHANGE, not identity; see quarterback.py.
+        "qb": [f"d_{c}" for c in QB_COLS if f"d_{c}" in cols],
+        # The audited six plus quarterback change and quality, kept as its own
+        # group so the QB contribution is measured rather than assumed.
+        "lean_qb": [c for c in LEAN_FEATURES + ["d_qb_epa_ewma", "d_qb_is_new"] if c in cols],
     }
 
 
