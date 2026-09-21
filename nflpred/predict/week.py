@@ -11,10 +11,22 @@ import pandas as pd
 from nflpred.config import Config
 from nflpred.features.build import build_features, select_features
 from nflpred.ingest.nflverse import cache_vintage
-from nflpred.models.registry import default_phase1_models
+from nflpred.models.registry import default_phase1_models, neural_models
 from nflpred.predict.log import append_predictions
 
 log = logging.getLogger(__name__)
+
+
+def all_models(cfg, targets: list[str] | None = None) -> list:
+    """Every model available for prediction, including the neural net when
+    torch is installed. torch is optional, so its absence is not an error."""
+    models = default_phase1_models(cfg, targets=targets)
+    try:
+        models += neural_models(cfg, targets=targets)
+    except ImportError:
+        log.info("torch not installed; skipping neural models "
+                 "(install with `make setup-neural`)")
+    return models
 
 
 def eastern_now() -> pd.Timestamp:
@@ -52,7 +64,7 @@ def upcoming_games(df: pd.DataFrame, now: pd.Timestamp | None = None) -> tuple[i
 def train_production_models(cfg: Config, df: pd.DataFrame, asof: pd.Timestamp,
                             models: list | None = None) -> list:
     """Fit every model on all completed games that kicked off before ``asof``."""
-    models = models if models is not None else default_phase1_models(cfg)
+    models = models if models is not None else all_models(cfg)
     include_post = cfg.get("data.include_postseason_in_training", True)
     train = df[df["played"] & (df["kickoff"] < asof)]
     if not include_post:
@@ -126,62 +138,53 @@ def load_models(path: str | Path) -> list:
 
 
 def format_week(preds: pd.DataFrame, model: str) -> str:
-    """Readable slate for one model: full game, then halftime."""
+    """The prediction: who wins, how confident, and the projected score.
+
+    Team scores are derived from the two things the model actually predicts -
+    the margin and the total - since home = (total + margin) / 2 and
+    away = (total - margin) / 2.
+    """
     d = preds[preds["model"] == model].copy()
     if d.empty:
         return f"(no predictions for model {model!r})"
-    d["matchup"] = d["away_team"] + " @ " + d["home_team"]
 
-    blocks = []
+    total = d["pred_total"]
+    margin = d["pred_spread"]
+    home_pts = (total + margin) / 2.0
+    away_pts = (total - margin) / 2.0
 
-    # --- full game -------------------------------------------------------
-    if "p_home" in d.columns:
-        g = pd.DataFrame({"matchup": d["matchup"]})
-        g["ML pick"] = np.where(d["p_home"] > 0.5, d["home_team"], d["away_team"])
-        g["win%"] = np.maximum(d["p_home"], 1 - d["p_home"])
-        if "pred_spread" in d.columns:
-            g["spread"] = d["pred_spread"]
-            g["line"] = d["vegas_spread"]
-            g["edge"] = d["pred_spread"] - d["vegas_spread"]
-            g["ATS side"] = np.where(
-                d["pred_spread"] > d["vegas_spread"], d["home_team"], d["away_team"]
-            )
-        if "pred_total" in d.columns:
-            g["total"] = d["pred_total"]
-            g["o/u line"] = d["vegas_total"]
-            g["O/U"] = np.where(d["pred_total"] > d["vegas_total"], "OVER", "UNDER")
-        blocks.append("FULL GAME\n" + _fmt(g, pct=["win%"],
-                                           signed=["spread", "line", "edge"],
-                                           plain=["total", "o/u line"]))
+    home_wins = d["p_home"] > 0.5
+    out = pd.DataFrame({
+        "matchup": d["away_team"] + " @ " + d["home_team"],
+        "WINNER": np.where(home_wins, d["home_team"], d["away_team"]),
+        "win%": np.maximum(d["p_home"], 1 - d["p_home"]).map("{:.0%}".format),
+        "confidence": np.maximum(d["p_home"], 1 - d["p_home"]).map(_confidence_word),
+        "projected score": [
+            f"{h} {hp:.0f} - {ap:.0f} {a}" if hw else f"{a} {ap:.0f} - {hp:.0f} {h}"
+            for h, a, hp, ap, hw in zip(d["home_team"], d["away_team"], home_pts, away_pts, home_wins)
+        ],
+        "total": total.map("{:.0f}".format),
+    })
 
-    # --- halftime --------------------------------------------------------
-    h1_cols = [c for c in ("p_home_h1", "pred_h1_spread", "pred_h1_total") if c in d.columns]
-    if h1_cols:
-        h = pd.DataFrame({"matchup": d["matchup"]})
-        if "p_home_h1" in d.columns:
-            h["H1 leader"] = np.where(d["p_home_h1"] > 0.5, d["home_team"], d["away_team"])
-            h["lead%"] = np.maximum(d["p_home_h1"], 1 - d["p_home_h1"])
-        if "pred_h1_spread" in d.columns:
-            h["H1 margin"] = d["pred_h1_spread"]
-        if "pred_h1_total" in d.columns:
-            h["H1 total"] = d["pred_h1_total"]
-        blocks.append(
-            "HALFTIME   (no market line exists for these - unbenchmarked)\n"
-            + _fmt(h, pct=["lead%"], signed=["H1 margin"], plain=["H1 total"])
-        )
-
-    return "\n\n".join(blocks)
+    h1 = ""
+    if "pred_h1_total" in d.columns:
+        h1_home = (d["pred_h1_total"] + d["pred_h1_spread"]) / 2.0
+        h1_away = (d["pred_h1_total"] - d["pred_h1_spread"]) / 2.0
+        # Leader first, matching the full-game column.
+        out["at half"] = [
+            f"{h} {hp:.0f} - {ap:.0f} {a}" if hp >= ap else f"{a} {ap:.0f} - {hp:.0f} {h}"
+            for h, a, hp, ap in zip(d["home_team"], d["away_team"], h1_home, h1_away)
+        ]
+    return out.to_string(index=False) + h1
 
 
-def _fmt(df: pd.DataFrame, pct=(), signed=(), plain=()) -> str:
-    out = df.copy()
-    for c in pct:
-        if c in out.columns:
-            out[c] = out[c].map(lambda v: f"{v:.3f}" if pd.notna(v) else "-")
-    for c in signed:
-        if c in out.columns:
-            out[c] = out[c].map(lambda v: f"{v:+.1f}" if pd.notna(v) else "-")
-    for c in plain:
-        if c in out.columns:
-            out[c] = out[c].map(lambda v: f"{v:.1f}" if pd.notna(v) else "-")
-    return out.to_string(index=False)
+def _confidence_word(p: float) -> str:
+    """Plain-language confidence. The model is well calibrated, so these mean
+    what they say: 'likely' picks really do win about 65% of the time."""
+    if p >= 0.75:
+        return "strong"
+    if p >= 0.65:
+        return "likely"
+    if p >= 0.57:
+        return "lean"
+    return "coin flip"
