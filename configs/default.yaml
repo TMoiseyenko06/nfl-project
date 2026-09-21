@@ -79,6 +79,20 @@ models:
     reg_lambda: 10.0
     verbosity: -1
 
+  # Phase 3 neural network. Small and heavily regularised on purpose: ~3,000
+  # training games is a tiny dataset for a network, so these are set for
+  # regularisation rather than capacity.
+  neural:
+    emb_dim: 8
+    hidden: 32
+    dropout: 0.4
+    weight_decay: 0.001
+    lr: 0.003
+    max_epochs: 400
+    patience: 30
+    val_fraction: 0.15
+    batch_size: 256
+
 evaluation:
   # Standard -110 juice: you need 11/21 = 52.38% to break even against the spread.
   ats_breakeven: 0.5238

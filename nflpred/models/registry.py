@@ -379,6 +379,22 @@ class LightGBMModel(BaseModel, MarginDerivedProbability):
         return pd.Series(imp, index=self.features_).sort_values(ascending=False)
 
 
+def neural_models(cfg, targets: list[str] | None = None) -> list[BaseModel]:
+    """Phase 3 models. Imported lazily so torch stays an optional dependency."""
+    from nflpred.models.neural import NeuralModel
+
+    core = ["context", "form", "adjusted", "matchup", "elo"]
+    nn_cfg = cfg.get("models.neural", {}) or {}
+    base = dict(groups=core, targets=targets, seed=cfg.seed, **nn_cfg)
+    return [
+        NeuralModel(**base),
+        # Same network plus learned QB-identity embeddings. Reported SEPARATELY
+        # because it sees information the tree and linear models do not, so it
+        # is not an apples-to-apples comparison with them.
+        NeuralModel(**{**base, "use_qb": True}, name="neural_qb"),
+    ]
+
+
 def default_phase1_models(cfg, targets: list[str] | None = None) -> list[BaseModel]:
     """The standard slate, in the order results are reported."""
     seed = cfg.seed
