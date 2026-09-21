@@ -15,6 +15,10 @@ dependencies = [
     "tzdata>=2024.1",  # IANA zones; zoneinfo has no bundled DB on slim images
 ]
 
+[project.optional-dependencies]
+# torch is imported lazily; the Phase 3 neural model is the only thing needing it.
+neural = ["torch>=2.0"]
+
 [project.scripts]
 nflpred = "nflpred.cli:main"
 

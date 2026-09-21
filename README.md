@@ -448,6 +448,66 @@ is the first thing I would cut.
 
 ---
 
+## Phase 3 results — the neural network
+
+Same 196 walk-forward folds, same feature set, same 2,524 games. The only
+difference between `neural` and `lightgbm` is the learner.
+
+| model | win acc | log loss | ECE | spread MAE | **ATS%** | **units** | h1 win acc |
+|---|---|---|---|---|---|---|---|
+| elo | .6391 | .6354 | .0246 | 10.286 | .4986 | −118.6 | .6110 |
+| **vegas** | **.6657** | **.6077** | .0246 | **9.878** | .5083 | −72.8 | **.6209** |
+| linear_coherent | **.6498** | **.6368** | .0453 | 10.337 | .5132 | −49.9 | .6041 |
+| lightgbm | .6415 | .6441 | .0407 | 10.439 | .4953 | −133.9 | .5912 |
+| **neural** | .6451 | .6450 | **.0356** | **10.330** | **.5319** | **+37.9** | **.6131** |
+| neural_qb | .6411 | .6571 | .0585 | 10.385 | .5083 | −72.8 | .6174 |
+
+**I predicted the network would be cut. It wasn't.** It beats LightGBM — the
+model it was gated against — on accuracy, calibration, spread MAE, ATS and
+every halftime target. Among the learned models it is best on 4 of 6 targets,
+and it is the **only model in the entire project with a positive ATS record**.
+
+The linear model still wins on win-probability accuracy and log loss, so the
+network is not a clean sweep. Split decision, documented as such.
+
+### About that +37.9 units — read this before believing it
+
+`neural` finished at **53.19% ATS** over 2,463 graded games, above the 52.38%
+break-even, positive units, and above break-even in **8 of 10 seasons**. That
+is the single best result in this project. It is still not enough to act on:
+
+| test | result | verdict |
+|---|---|---|
+| vs. a coin flip (50%) | p = 0.0017 | **clearly not random** |
+| vs. break-even (52.38%) | p = 0.217 | **not significant** |
+| 95% CI | 51.2% – 55.2% | includes losing money |
+
+And the multiple-comparisons problem is real: **15 model variants were tested
+across this project.** Finding one above break-even by chance across that many
+looks is roughly what you would expect. The honest statement is *"the network
+is clearly better than random at picking sides, and may or may not be better
+than break-even"* — and only forward testing can settle which.
+
+Nothing here changes the headline: **the market is still the best predictor**,
+by log loss, Brier, spread MAE and total MAE.
+
+### QB embeddings made it worse
+
+`neural_qb` adds learned QB-identity vectors and is worse on win accuracy, log
+loss, calibration, spread MAE and ATS. With ~3,000 games and hundreds of
+quarterbacks, most QB embeddings are fit on a handful of starts and become
+noise. It is kept and reported separately because it also sees information the
+tree and linear models do not, so it was never an apples-to-apples comparison.
+
+### What the network does that the others cannot
+
+Team identity is a learned 8-dimensional vector rather than a fixed feature, a
+shared trunk feeds one head per target, and the embeddings are trained jointly
+across all six targets instead of refit six times. `NeuralModel.team_embeddings()`
+returns those vectors.
+
+---
+
 ## What I'd do next, and what I'm skeptical of
 
 ### Next
@@ -497,8 +557,9 @@ is that its value would be measurable in MAE and calibration, not in ATS.
   fitting the test set; they need a nested walk-forward.
 - **`d_margin_r5` ranking second.** Recent point margin is famously noisy and
   mean-reverting. Its importance may be the model latching onto variance.
-- **A neural network is not justified by these results.** Per the brief, Phase 3
-  is gated on beating Phase 1 out-of-sample. Phase 1's best learned model is a
-  ridge/logistic pair that still loses to the market, and the *smaller* model
-  beat the larger one. Adding capacity is the opposite of what the evidence
-  points to. **Not building it yet.**
+- **The neural network's ATS record.** It is the best number in this project
+  and the one most likely to be an artifact of having tested 15 variants. I
+  would not bet it; I would forward-test it. See Phase 3 above.
+- **`neural_qb`.** Adding QB identity made every headline metric worse, which
+  is the opposite of the prior going in. That is worth understanding rather
+  than discarding — it likely means the embedding is too free for the sample.

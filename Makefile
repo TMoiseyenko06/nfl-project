@@ -10,6 +10,11 @@ setup:
 	.venv/bin/pip install -q -e .
 	.venv/bin/pip install -q pytest
 
+# The neural network is optional: torch is a large install and everything else
+# works without it.
+setup-neural:
+	.venv/bin/pip install -q torch
+
 fetch:
 	$(CLI) fetch
 
