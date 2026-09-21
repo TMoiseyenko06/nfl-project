@@ -263,6 +263,12 @@ refit every week. Data vintage `e1e882d2217b`.
 
 ATS break-even at −110 juice: **.5238**. Every model is below it.
 
+> **Read the `vegas` ATS row carefully.** That model predicts the line exactly,
+> so `pred_spread > vegas_spread` is never true and it silently becomes
+> "always pick the away team". Its .5083 is just the rate at which away teams
+> covered (a real but tiny effect), **not** the market beating itself. It is
+> included for completeness, not as a strategy.
+
 ### What this actually says
 
 **1. Nothing here beats the market.** Vegas has the best log loss, Brier,
