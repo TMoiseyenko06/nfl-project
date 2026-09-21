@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+data/cache/raw/*.parquet
+data/cache/raw/*.csv
+data/cache/features/
+# Large derived artifacts. The summary CSVs and the prediction log ARE
+# committed: they are the record of what the system claimed and when.
+artifacts/*.pkl
+artifacts/*.txt
+artifacts/backtest_predictions.parquet
+artifacts/backtest_phase1.parquet
+.pytest_cache/
+*.egg-info/
