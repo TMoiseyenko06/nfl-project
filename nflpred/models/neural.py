@@ -22,7 +22,7 @@ import logging
 import numpy as np
 import pandas as pd
 
-from nflpred.models.registry import BaseModel, Predictions, _usable
+from nflpred.models.registry import DEFAULT_GROUPS, BaseModel, Predictions, _usable
 from nflpred.models.targets import BINARY_FROM_MARGIN
 
 log = logging.getLogger(__name__)
@@ -114,7 +114,7 @@ class NeuralModel(BaseModel):
                  val_fraction: float = 0.15, batch_size: int = 256,
                  use_qb: bool = False, derive_binary_from_margin: bool = True):
         super().__init__(targets)
-        self.groups = groups or ["context", "form", "adjusted", "matchup", "elo"]
+        self.groups = groups or DEFAULT_GROUPS
         if name:
             self.name = name
         self.seed, self.emb_dim, self.hidden = seed, emb_dim, hidden

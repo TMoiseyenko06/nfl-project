@@ -40,6 +40,18 @@ CTX_GAME_COLS = [
 ROLL_EWMA = [f"{m}_ewma" for m in METRICS]
 ROLL_WINDOW = ["off_epa_play_r8", "def_epa_play_r8", "net_epa_r8", "off_success_rate_r8"]
 ROLL_EXTRA = ["games_this_season", "margin_r5"]
+# Metrics summed home+away rather than differenced. A difference cancels out
+# exactly what a TOTAL needs to know - that both teams score a lot, or that
+# both play fast. Every team feature was a difference until this was added,
+# which is why the totals model was no better than guessing the league mean.
+SUM_COLS = [
+    "off_epa_play_ewma", "def_epa_play_ewma",
+    "off_success_rate_ewma", "off_explosive_rate_ewma",
+    "off_pass_epa_ewma", "off_proe_ewma",
+    "off_plays_ewma", "def_plays_ewma",
+    "points_for_ewma", "points_against_ewma",
+    "points_for_r8", "points_against_r8",
+]
 ADJ_COLS = [
     "adj_off_epa_play_off", "adj_off_epa_play_def", "adj_off_epa_play_net",
     "adj_off_success_rate_net",
@@ -167,10 +179,29 @@ def _build_uncached(cfg: Config, asof: pd.Timestamp | None) -> pd.DataFrame:
 
     # Rolling form + adjusted ratings, differenced.
     roll_cols = ROLL_EWMA + ROLL_WINDOW + ROLL_EXTRA + ADJ_COLS
-    r_home, r_away = _pivot(team_level, tg, roll_cols)
+    r_home, r_away = _pivot(team_level, tg, sorted(set(roll_cols + SUM_COLS)))
     for c in roll_cols:
         if c in r_home.columns:
             out[f"d_{c}"] = r_home[c] - r_away[c]
+
+    # Summed features, for the totals target.
+    for c in SUM_COLS:
+        if c in r_home.columns:
+            out[f"s_{c}"] = r_home[c] + r_away[c]
+
+    # Direct estimate of the game total: what each offence usually scores,
+    # blended with what the opposing defence usually allows.
+    if "points_for_ewma" in r_home.columns:
+        home_exp = (r_home["points_for_ewma"] + r_away["points_against_ewma"]) / 2.0
+        away_exp = (r_away["points_for_ewma"] + r_home["points_against_ewma"]) / 2.0
+        out["s_expected_total"] = home_exp + away_exp
+        out["d_expected_margin"] = home_exp - away_exp
+    # Expected possessions: pace of both teams combined.
+    if "off_plays_ewma" in r_home.columns:
+        out["s_expected_plays"] = (
+            (r_home["off_plays_ewma"] + r_away["def_plays_ewma"]) / 2.0
+            + (r_away["off_plays_ewma"] + r_home["def_plays_ewma"]) / 2.0
+        )
 
     # Explicit matchup terms: each offence against the other defence.
     def mu(off_col, def_col, name):
@@ -229,6 +260,9 @@ def feature_groups(df: pd.DataFrame) -> dict[str, list[str]]:
         "adjusted": [c for c in cols if c.startswith("d_adj_")],
         "matchup": [c for c in cols if c.startswith("mu_")],
         "elo": [c for c in cols if c.startswith("elo_")],
+        # Summed (not differenced) features. Only these carry information about
+        # how much scoring a game will contain, as opposed to who wins it.
+        "totals": [c for c in cols if c.startswith("s_")],
         "vegas": [c for c in cols if c.startswith("vegas_")],
     }
 

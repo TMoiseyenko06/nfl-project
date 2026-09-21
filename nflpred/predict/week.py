@@ -170,6 +170,8 @@ def format_week(preds: pd.DataFrame, model: str) -> str:
     if "pred_h1_total" in d.columns:
         h1_home = (d["pred_h1_total"] + d["pred_h1_spread"]) / 2.0
         h1_away = (d["pred_h1_total"] - d["pred_h1_spread"]) / 2.0
+        out["H1 LEADER"] = np.where(h1_home >= h1_away, d["home_team"], d["away_team"])
+        out["H1 win%"] = np.maximum(d["p_home_h1"], 1 - d["p_home_h1"]).map("{:.0%}".format)
         # Leader first, matching the full-game column.
         out["at half"] = [
             f"{h} {hp:.0f} - {ap:.0f} {a}" if hp >= ap else f"{a} {ap:.0f} - {hp:.0f} {h}"

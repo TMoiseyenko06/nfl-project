@@ -20,6 +20,10 @@ from sklearn.preprocessing import StandardScaler
 
 from nflpred.models.targets import BINARY_FROM_MARGIN, TargetSpec, resolve
 
+# "totals" holds the summed (home+away) features. Without it a model can only
+# see who is better, never how much scoring a game will contain.
+DEFAULT_GROUPS = ["context", "form", "adjusted", "matchup", "elo", "totals"]
+
 
 class Predictions:
     """Per-target predictions, keyed by the target's prediction column."""
@@ -237,7 +241,7 @@ class LinearModel(BaseModel, MarginDerivedProbability):
         super().__init__(targets)
         self.derive_binary_from_margin = derive_binary_from_margin
         self.C, self.alpha, self.max_iter = C, alpha, max_iter
-        self.groups = groups or ["context", "form", "adjusted", "matchup", "elo"]
+        self.groups = groups or DEFAULT_GROUPS
         if name:
             self.name = name
 
@@ -315,7 +319,7 @@ class LightGBMModel(BaseModel, MarginDerivedProbability):
         self.derive_binary_from_margin = derive_binary_from_margin
         self.params = dict(params or {})
         self.seed = seed
-        self.groups = groups or ["context", "form", "adjusted", "matchup", "elo"]
+        self.groups = groups or DEFAULT_GROUPS
         if name:
             self.name = name
 
@@ -383,7 +387,7 @@ def neural_models(cfg, targets: list[str] | None = None) -> list[BaseModel]:
     """Phase 3 models. Imported lazily so torch stays an optional dependency."""
     from nflpred.models.neural import NeuralModel
 
-    core = ["context", "form", "adjusted", "matchup", "elo"]
+    core = list(DEFAULT_GROUPS)
     nn_cfg = cfg.get("models.neural", {}) or {}
     base = dict(groups=core, targets=targets, seed=cfg.seed, **nn_cfg)
     return [
@@ -398,7 +402,7 @@ def neural_models(cfg, targets: list[str] | None = None) -> list[BaseModel]:
 def default_phase1_models(cfg, targets: list[str] | None = None) -> list[BaseModel]:
     """The standard slate, in the order results are reported."""
     seed = cfg.seed
-    core = ["context", "form", "adjusted", "matchup", "elo"]
+    core = list(DEFAULT_GROUPS)
     lin = dict(C=cfg.get("models.logistic.C"), alpha=cfg.get("models.ridge.alpha"),
                max_iter=cfg.get("models.logistic.max_iter"))
     gbm = dict(params=cfg.get("models.lightgbm"), seed=seed)

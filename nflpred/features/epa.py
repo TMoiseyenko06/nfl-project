@@ -110,6 +110,9 @@ METRICS = [
     "def_epa_play", "def_success_rate", "def_pass_epa", "def_rush_epa",
     "def_early_epa", "def_explosive_rate",
     "net_epa",
+    # Pace. Plays per game drives possessions, which drives total points.
+    # Absent from the feature set until now, which is part of why totals failed.
+    "off_plays", "def_plays",
 ]
 
 
@@ -152,6 +155,20 @@ def rolling_features(
     out["games_this_season"] = (
         same_season.groupby(df["team"], sort=False).cumsum().astype(float)
     )
+    # Points scored and allowed. EPA measures efficiency; totals need scoring
+    # rate, and teams convert efficiency to points at different rates (red
+    # zone, kicking). Rolled here so the totals model can actually see it.
+    for src, name in (("team_score", "points_for"), ("opp_score", "points_against")):
+        if src not in team_games.columns:
+            continue
+        v = df.merge(team_games[["game_id", "team", src]], on=["game_id", "team"], how="left")[src]
+        pv = v.groupby(df["team"], sort=False).shift(1)
+        g = pv.groupby(df["team"], sort=False)
+        out[f"{name}_ewma"] = g.transform(
+            lambda s: s.ewm(halflife=halflife, min_periods=1, ignore_na=True).mean()
+        )
+        out[f"{name}_r8"] = g.transform(lambda s: s.rolling(8, min_periods=2).mean())
+
     # Recent form: mean scoring margin over the previous 5 games.
     if "margin" in team_games.columns:
         m = df.merge(team_games[["game_id", "team", "margin"]], on=["game_id", "team"], how="left")["margin"]
