@@ -508,6 +508,91 @@ returns those vectors.
 
 ---
 
+## Scorecard — each criterion separately (2025-2026, 315 blind games)
+
+`python tools/scorecard.py neural`
+
+| # | criterion | model | baseline | verdict |
+|---|---|---|---|---|
+| 1 | **Who wins** | **65.6%** | 53.2% | ✅ **works** |
+| 2 | Who leads at halftime | 60.9% | 55.6% | ⚠️ only +5 pts |
+| 3 | Total points | 10.8 avg miss | 11.2 | ⚠️ +3% |
+| 4 | **Margin of victory** | **10.1 avg miss** | 11.1 | ✅ **+9.6%** |
+| 5 | Each team's score | 7.5 per team | 8.0 | ⚠️ +6% |
+| 6 | Halftime total | 7.4 | 7.5 | ❌ **no better than guessing** |
+
+**Confidence labels on the winner pick are meaningful:**
+
+| label | says | actually right | n |
+|---|---|---|---|
+| strong | ~82% | **76%** | 83 |
+| likely | ~70% | **69%** | 87 |
+| lean | ~61% | 58% | 81 |
+| coin flip | ~54% | 57% | 63 |
+
+Trust `strong` and `likely`. Below that it is close to noise.
+
+**Read the totals row carefully.** Average miss improves 3%, but the *hit rate*
+does not move: within 7 points it lands 40% of the time, and so does guessing
+the league average. The mean improves while the practical accuracy does not.
+Over the full 2,524 games the totals edge is **+1.9%**, not the +3.7% the
+two-season holdout suggested — the smaller sample flattered it.
+
+---
+
+## Overfitting audit
+
+`python tools/overfit_audit.py` — four checks that walk-forward does *not* catch.
+
+**1. Train vs test gap** — a model that memorises scores far better on games it has seen.
+
+| model | train acc | test acc | gap |
+|---|---|---|---|
+| linear | .6661 | .6338 | **+.032** ✅ |
+| lightgbm | .7663 | .6178 | **+.148** ❌ |
+| neural | .6759 | .6146 | +.061 |
+
+**LightGBM overfits badly** — it scores 77% on games it trained on and 62% on
+new ones. That is the explanation for why it lost to the linear model on nearly
+every metric throughout this project. The linear model's 3-point gap is clean.
+
+**2. Shuffled labels** — train on randomly scrambled outcomes; the model should learn nothing.
+
+The right reference here is **not 50%**. Shuffling preserves the marginal
+home-win rate, so a model that learns nothing still predicts the base rate and
+scores ~53%. Against that threshold (53.2% ± 5.6%), all three models come back
+clean: linear .557, lightgbm .494, neural .541. No hidden signal.
+
+**3. Does a tiny model do just as well? — yes, and that is a finding**
+
+| feature set | n | test acc | total MAE |
+|---|---|---|---|
+| **tiny** | **6** | **.6433** | 10.813 |
+| full | 80 | .6338 | 10.758 |
+
+**Six features beat eighty on accuracy** and essentially tie on totals. The
+other 74 are not earning their place. This is the single clearest evidence in
+the project that the feature set is too wide for ~3,000 games — and it is the
+most actionable thing here.
+
+**4. Stability over time** — no degradation.
+
+2017-2021: 64.7% · 2022-2026: 65.1% · drift **+0.4 points**. Season range
+60-67% with no trend. The model is not decaying away from its training era.
+
+### Verdict
+
+**The pipeline is not overfitting in the dangerous sense** — no leakage, no
+train/test contamination, stable across nine seasons. But **LightGBM overfits
+individually**, and **the feature set is bloated**: a 6-feature model matches
+or beats the 80-feature one.
+
+The overfitting that remains is the kind no test catches: **15+ model variants
+were tried and the best reported.** That selection effect is real and is why
+no single result here should be treated as established.
+
+---
+
 ## What I'd do next, and what I'm skeptical of
 
 ### Next
