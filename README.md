@@ -301,24 +301,65 @@ produced from a vintage that fails the audit does not get written.
 
 ## Phase 1 results
 
-> **Note:** the table below is the original **three-target, seven-model** run
-> (win / spread / total). The halftime targets and the `*_coherent` models were
-> added afterwards and are being re-backtested across all six targets; this
-> section will be replaced with those numbers. The conclusions below still
-> hold for the models they describe.
-
 Walk-forward out-of-sample, **2,524 games** (2017 wk1 – 2026 wk2), 196 folds,
-refit every week. Data vintage `e1e882d2217b`.
+9 models, refit every week. Data vintage `e1e882d2217b`.
 
-| model | accuracy | log loss | Brier | ECE | spread MAE | ATS% | ATS units | total MAE |
-|---|---|---|---|---|---|---|---|---|
-| home_team | .5461 | .6893 | .2481 | .0095 | 11.087 | .5124 | −53.7 | 11.090 |
-| elo | .6391 | .6354 | .2223 | .0246 | 10.286 | .4986 | −118.6 | 11.090 |
-| **vegas** | **.6657** | **.6077** | **.2102** | .0246 | **9.878** | .5083 | −72.8 | **10.512** |
-| linear | .6455 | .6404 | .2236 | .0384 | 10.337 | .5132 | −49.9 | 11.116 |
-| lightgbm | .6415 | .6441 | .2251 | .0407 | 10.439 | .4953 | −133.9 | 11.244 |
-| linear_plus_vegas | .6729 | .6206 | .2148 | .0309 | 10.018 | .5225 | −6.0 | 10.675 |
-| lightgbm_plus_vegas | .6570 | .6263 | .2171 | .0298 | 10.177 | .5026 | −99.5 | 10.814 |
+### Full game
+
+| model | win acc | log loss | ECE | spread MAE | ATS% | ATS units | total MAE |
+|---|---|---|---|---|---|---|---|
+| home_team | .5461 | .6893 | .0095 | 11.087 | .5124 | −53.7 | 11.090 |
+| elo | .6391 | .6354 | .0246 | 10.286 | .4986 | −118.6 | 11.090 |
+| **vegas** | **.6657** | **.6077** | .0246 | **9.878** | .5083 | −72.8 | **10.512** |
+| linear | .6455 | .6404 | .0384 | 10.337 | .5132 | −49.9 | 11.116 |
+| lightgbm | .6415 | .6441 | .0407 | 10.439 | .4953 | −133.9 | 11.244 |
+| linear_plus_vegas | .6729 | .6206 | .0309 | 10.018 | .5225 | −6.0 | 10.675 |
+| lightgbm_plus_vegas | .6570 | .6263 | .0298 | 10.177 | .5026 | −99.5 | 10.814 |
+| linear_coherent | .6498 | .6368 | .0453 | 10.337 | .5132 | −49.9 | 11.116 |
+| lightgbm_coherent | .6459 | .7168 | .1167 | 10.439 | .4953 | −133.9 | 11.244 |
+
+### Halftime — no market benchmark exists for these
+
+| model | h1 win acc | log loss | h1 margin MAE | h1 total MAE |
+|---|---|---|---|---|
+| home_team (constant) | .5466 | .6898 | 8.641 | 7.206 |
+| elo | .6110 | .6617 | 8.258 | 7.212 |
+| vegas *(derived)* | **.6209** | **.6494** | **8.157** | **6.973** |
+| linear | .5981 | .6728 | 8.314 | 7.275 |
+| lightgbm | .5912 | .6779 | 8.379 | 7.332 |
+| linear_plus_vegas | .6140 | .6667 | 8.247 | 7.052 |
+| linear_coherent | .6041 | .6704 | 8.314 | 7.275 |
+| lightgbm_coherent | .6054 | .8052 | 8.379 | 7.332 |
+
+**Halftime is genuinely predictable, but only partly.** Picking who leads at the
+break beats the constant baseline by 7.4 points (.621 vs .547), which is real.
+Halftime *margin* improves 5.6% over guessing. But halftime *total points*
+improves only **3.2%** over blindly predicting 23 every time — that is close to
+nothing, and halftime totals should not be trusted for anything.
+
+Note also that halftime is harder than the full game in relative terms (.62 vs
+.67 accuracy). Less football has been played, so less talent has shown up.
+
+### ⚠️ `lightgbm_coherent` is miscalibrated — do not use it
+
+The margin-derived probability (see "Coherent win probability") **helps the
+linear model and breaks LightGBM**:
+
+| | log loss | ECE (miscalibration) |
+|---|---|---|
+| linear → linear_coherent | .6404 → **.6368** ✅ | .0384 → .0453 |
+| lightgbm → lightgbm_coherent | .6441 → **.7168** ❌ | .0407 → **.1167** |
+
+The conversion forces the curve through 0.5 at margin zero, which is what
+guarantees coherence. LightGBM's margin predictions are noisier and slightly
+biased, and with no intercept available to absorb that bias the probabilities
+come out systematically wrong — nearly 3x the calibration error, and worse on
+the halftime target (.8052 log loss, .1643 ECE).
+
+**Use `linear_coherent` when you need the moneyline and spread to agree.** The
+option is kept rather than deleted because the failure is informative: it shows
+the coherence constraint is not free, and what it costs depends on how well
+calibrated the underlying margin model is.
 
 ATS break-even at −110 juice: **.5238**. Every model is below it.
 
