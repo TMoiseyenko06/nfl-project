@@ -654,6 +654,56 @@ without being best at any — which is exactly what a good ensemble looks like.
 
 ---
 
+## Exhaustive strategy search — the bottom line
+
+`python tools/strategy_scan.py` tests every combination of model × market ×
+side × edge threshold × context, then applies Benjamini-Hochberg FDR control
+because testing hundreds of strategies *guarantees* false positives.
+
+**1,897 strategies tested. 219 profitable at raw p<0.05. Zero survive
+correction.**
+
+At that many tests you expect roughly 95 to pass by chance alone, so 219 is not
+the signal it looks like — and after correcting for how many shots were taken,
+nothing remains.
+
+The top results show why raw p-values mislead here:
+
+| strategy | ROI | first half | second half |
+|---|---|---|---|
+| neural, wk1-6, underdogs | +22.3% | **+38.7%** | +1.8% |
+| lean_qb, wk1-6, underdogs | +16.7% | **+60.6%** | **−18.7%** |
+
+Enormous early, collapsing late. That is the fingerprint of a strategy fitted
+to the past, and the +60.6% one flips to −18.7% in the second half.
+
+### The single exception
+
+```
+lean_qb | weeks 7-13 | UNDER when the model is 3+ points below the line
+  120 bets · 63.3% hit · +20.9% ROI · first half +24.1% · second half +14.5%
+```
+
+The only strategy of 1,897 that is substantially positive in **both** halves,
+and the same pattern appears independently with the `lean` feature set
+(+20.3%, both halves positive). It still does not survive correction, and 120
+bets across nine seasons is ~13 per year, so it would take a decade to know.
+Recorded here as the one thing worth re-checking as seasons accumulate, not as
+a recommendation.
+
+### What this means
+
+There is no demonstrable betting edge anywhere in this model — not moneyline,
+spreads or totals; not favorites or underdogs; not in any week range, line size
+or confidence threshold. That is not a failure of search effort. It is what an
+efficient market looks like when tested honestly.
+
+Caveat on the method: these strategies overlap heavily (same games, nested
+filters), so the "95 expected" figure and the FDR correction are both
+approximations. The direction of the conclusion is not sensitive to that.
+
+---
+
 ## What I'd do next, and what I'm skeptical of
 
 ### Next
