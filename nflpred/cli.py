@@ -67,12 +67,14 @@ def cmd_backtest(args, cfg: Config) -> int:
             print(f"no models matched {args.models!r}", file=sys.stderr)
             return 2
 
+    targets = args.targets.split(",") if getattr(args, "targets", None) else None
+    models = default_phase1_models(cfg, targets=targets) if targets else models
     preds = run_backtest(df, models, cfg)
     out = cfg.artifacts
     out.mkdir(parents=True, exist_ok=True)
     preds.to_parquet(out / "backtest_predictions.parquet", index=False)
 
-    tab = summarize(preds, cfg, model_order=[m.name for m in models])
+    tab = summarize(preds, cfg, model_order=[m.name for m in models], targets=targets)
     tab.to_csv(out / "backtest_summary.csv", index=False)
     print("\n" + "=" * 108)
     print(f"WALK-FORWARD OUT-OF-SAMPLE  |  {preds.season.min()} wk{preds[preds.season==preds.season.min()].week.min()}"
@@ -84,9 +86,10 @@ def cmd_backtest(args, cfg: Config) -> int:
     bs = by_season(preds, cfg)
     bs.to_csv(out / "backtest_by_season.csv", index=False)
     if args.by_season:
-        print("\nper-season accuracy:")
-        piv = bs.pivot(index="season", columns="model", values="accuracy")
-        print(piv.round(4).to_string())
+        win = bs[bs["target"] == "win"]
+        if not win.empty:
+            print("\nper-season accuracy (win):")
+            print(win.pivot(index="season", columns="model", values="accuracy").round(4).to_string())
     print(f"\nartifacts written to {out}/")
     return 0
 
@@ -136,8 +139,8 @@ def cmd_score(args, cfg: Config) -> int:
     if perf.empty:
         print("nothing to score yet")
         return 0
-    cols = [c for c in ["season", "week", "model", "n_games", "accuracy",
-                        "log_loss", "brier", "spread_mae", "ats_pct"] if c in perf.columns]
+    cols = [c for c in ["season", "week", "target", "model", "n_games", "accuracy",
+                        "log_loss", "brier", "mae", "ats_pct"] if c in perf.columns]
     print(perf[cols].to_string(index=False))
     return 0
 
@@ -182,6 +185,7 @@ def main(argv: list[str] | None = None) -> int:
     sp = sub.add_parser("backtest", help="walk-forward evaluation")
     sp.add_argument("--models", help="comma-separated subset of model names")
     sp.add_argument("--by-season", action="store_true", help="also print per-season accuracy")
+    sp.add_argument("--targets", help="comma-separated targets (default: all)")
     sp.set_defaults(func=cmd_backtest)
 
     sp = sub.add_parser("train", help="fit production models on all completed games")

@@ -137,38 +137,54 @@ def expected_calibration_error(y_true, p_home, bins: int = 10) -> float:
     return float((t["n"] * t["gap"].abs()).sum() / t["n"].sum())
 
 
-def evaluate(df: pd.DataFrame, ats_breakeven: float = 0.5238) -> dict:
-    """Full metric bundle for one model's out-of-sample predictions.
+def evaluate_target(df: pd.DataFrame, spec, ats_breakeven: float = 0.5238) -> dict:
+    """Metric bundle for one model on one target.
 
-    Expects columns: home_win, spread_actual, total_actual, vegas_spread,
-    vegas_total and whichever of p_home / pred_spread / pred_total exist.
+    Binary targets get accuracy / log loss / Brier / calibration error, with
+    ties excluded (a tie has no winner). Regression targets get MAE and RMSE,
+    plus a market record where a real line exists for that target - which is
+    the full-game spread and total only. Halftime has no free market, so no
+    ATS or over/under is reported for it rather than inventing one.
     """
-    out: dict = {"n_games": int(len(df))}
+    out: dict = {"target": spec.name}
+    col, pred = spec.column, spec.pred_column
+    if col not in df.columns or pred not in df.columns:
+        return out
 
-    if "p_home" in df and df["p_home"].notna().any():
-        # Ties (~0.3% of games) have no winner; exclude them from classification.
-        d = df[df["home_win"].isin([0.0, 1.0])]
-        out.update(
-            {
-                "n_cls": int(len(d)),
-                "accuracy": accuracy(d["home_win"], d["p_home"]),
-                "log_loss": log_loss(d["home_win"], d["p_home"]),
-                "brier": brier(d["home_win"], d["p_home"]),
-                "ece": expected_calibration_error(d["home_win"], d["p_home"]),
-            }
-        )
+    d = df[df[col].notna() & df[pred].notna()]
+    out["n_games"] = int(len(d))
+    if d.empty:
+        return out
 
-    if "pred_spread" in df and df["pred_spread"].notna().any():
-        out["spread_mae"] = mae(df["spread_actual"], df["pred_spread"])
-        out["spread_rmse"] = rmse(df["spread_actual"], df["pred_spread"])
-        rec = ats_record(df["pred_spread"], df["spread_actual"], df["vegas_spread"])
-        out.update(rec)
-        out["ats_units"] = ats_units(rec)
-        out["ats_edge"] = (rec["ats_pct"] - ats_breakeven) if np.isfinite(rec["ats_pct"]) else np.nan
+    if spec.is_binary:
+        b = d[d[col].isin([0.0, 1.0])]
+        out.update({
+            "n_scored": int(len(b)),
+            "accuracy": accuracy(b[col], b[pred]),
+            "log_loss": log_loss(b[col], b[pred]),
+            "brier": brier(b[col], b[pred]),
+            "ece": expected_calibration_error(b[col], b[pred]),
+        })
+        return out
 
-    if "pred_total" in df and df["pred_total"].notna().any():
-        out["total_mae"] = mae(df["total_actual"], df["pred_total"])
-        out["total_rmse"] = rmse(df["total_actual"], df["pred_total"])
-        out.update(totals_record(df["pred_total"], df["total_actual"], df["vegas_total"]))
+    out["n_scored"] = int(len(d))
+    out["mae"] = mae(d[col], d[pred])
+    out["rmse"] = rmse(d[col], d[pred])
 
+    market = spec.market_column
+    if market and market in d.columns:
+        if spec.name == "spread":
+            rec = ats_record(d[pred], d[col], d[market])
+            out.update(rec)
+            out["ats_units"] = ats_units(rec)
+            out["ats_edge"] = (rec["ats_pct"] - ats_breakeven) if np.isfinite(rec["ats_pct"]) else np.nan
+        elif spec.name == "total":
+            out.update(totals_record(d[pred], d[col], d[market]))
     return out
+
+
+def evaluate(df: pd.DataFrame, specs=None, ats_breakeven: float = 0.5238) -> list[dict]:
+    """Metric bundles for every requested target."""
+    from nflpred.models.targets import resolve
+
+    return [evaluate_target(df, spec, ats_breakeven) for spec in resolve(specs)]

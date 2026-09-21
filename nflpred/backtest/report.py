@@ -40,9 +40,10 @@ def format_calibration(tab: pd.DataFrame, model: str) -> str:
     return "\n".join(lines)
 
 
-def shap_summary(model, X: pd.DataFrame, features: list[str], top: int = 20) -> pd.DataFrame:
-    """Mean |SHAP| per feature for a fitted LightGBM classifier."""
-    booster = getattr(model, "clf_", None)
+def shap_summary(model, X: pd.DataFrame, features: list[str], top: int = 20,
+                 target: str = "win") -> pd.DataFrame:
+    """Mean |SHAP| per feature for one fitted LightGBM target."""
+    booster = getattr(model, "models_", {}).get(target)
     if booster is None or not hasattr(booster, "booster_"):
         return pd.DataFrame()
     contrib = booster.booster_.predict(X[features].to_numpy(), pred_contrib=True)
@@ -56,7 +57,7 @@ def shap_summary(model, X: pd.DataFrame, features: list[str], top: int = 20) -> 
 
 
 def importance_report(cfg, df: pd.DataFrame, model_name: str = "lightgbm",
-                      top: int = 20) -> dict[str, pd.DataFrame]:
+                      top: int = 20, target: str = "win") -> dict[str, pd.DataFrame]:
     """Fit the named model on all completed games and report what it leans on."""
     from nflpred.features.build import select_features
     from nflpred.models.registry import default_phase1_models
@@ -70,10 +71,10 @@ def importance_report(cfg, df: pd.DataFrame, model_name: str = "lightgbm",
     model.fit(train, feats)
 
     out = {}
-    imp = model.feature_importance()
+    imp = model.feature_importance(target=target)
     if imp is not None:
         out["gain"] = imp.head(top).rename("gain").reset_index().rename(columns={"index": "feature"})
-    sh = shap_summary(model, train, feats, top=top)
+    sh = shap_summary(model, train, feats, top=top, target=target)
     if not sh.empty:
         out["shap"] = sh
     return out

@@ -18,6 +18,7 @@ from nflpred.config import Config
 from nflpred.features.adjust import opponent_adjusted_ratings
 from nflpred.features.epa import METRICS, game_box, rolling_features
 from nflpred.features.schedule import build_team_games, context_features
+from nflpred.features.targets import attach_halftime_targets
 from nflpred.ingest.nflverse import cache_vintage, load_games, load_pbp
 from nflpred.models.elo import run_elo
 
@@ -146,6 +147,10 @@ def _build_uncached(cfg: Config, asof: pd.Timestamp | None) -> pd.DataFrame:
     out.loc[out["spread_actual"] == 0, "home_win"] = 0.5          # ties, ~0.3% of games
     out["played"] = out["spread_actual"].notna()
 
+    # Halftime targets, derived from play-by-play (see features/targets.py).
+    out = out.reset_index()
+    out = attach_halftime_targets(out, pbp).set_index("game_id")
+
     # Market.
     out["vegas_spread"] = gk["spread_line"]
     out["vegas_total"] = gk["total_line"]
@@ -206,7 +211,10 @@ META_COLS = [
     "game_id", "season", "week", "game_type", "kickoff", "gameday",
     "home_team", "away_team", "home_qb_id", "away_qb_id", "played",
 ]
-TARGET_COLS = ["home_score", "away_score", "spread_actual", "total_actual", "home_win"]
+TARGET_COLS = [
+    "home_score", "away_score", "spread_actual", "total_actual", "home_win",
+    "h1_home_score", "h1_away_score", "h1_spread_actual", "h1_total_actual", "h1_home_win",
+]
 
 
 def feature_groups(df: pd.DataFrame) -> dict[str, list[str]]:

@@ -102,9 +102,8 @@ def predict_week(
                 "vegas_total": target["vegas_total"].to_numpy(),
             }
         )
-        rec["p_home"] = p.p_home if p.p_home is not None else np.nan
-        rec["pred_spread"] = p.pred_spread if p.pred_spread is not None else np.nan
-        rec["pred_total"] = p.pred_total if p.pred_total is not None else np.nan
+        for col, arr in p.values.items():
+            rec[col] = arr
         rows.append(rec)
 
     out = pd.concat(rows, ignore_index=True)
@@ -127,22 +126,62 @@ def load_models(path: str | Path) -> list:
 
 
 def format_week(preds: pd.DataFrame, model: str) -> str:
-    """Readable slate for one model."""
+    """Readable slate for one model: full game, then halftime."""
     d = preds[preds["model"] == model].copy()
     if d.empty:
         return f"(no predictions for model {model!r})"
     d["matchup"] = d["away_team"] + " @ " + d["home_team"]
-    d["pick"] = np.where(d["p_home"] > 0.5, d["home_team"], d["away_team"])
-    d["conf"] = np.maximum(d["p_home"], 1 - d["p_home"])
-    d["ats_side"] = np.where(
-        d["pred_spread"] > d["vegas_spread"], d["home_team"], d["away_team"]
-    )
-    d["edge_vs_line"] = d["pred_spread"] - d["vegas_spread"]
-    cols = ["matchup", "p_home", "pick", "conf", "pred_spread", "vegas_spread",
-            "edge_vs_line", "ats_side", "pred_total", "vegas_total"]
-    view = d[cols].copy()
-    for c in ["p_home", "conf"]:
-        view[c] = view[c].map("{:.3f}".format)
-    for c in ["pred_spread", "vegas_spread", "edge_vs_line", "pred_total", "vegas_total"]:
-        view[c] = view[c].map(lambda v: f"{v:+.1f}" if pd.notna(v) else "-")
-    return view.to_string(index=False)
+
+    blocks = []
+
+    # --- full game -------------------------------------------------------
+    if "p_home" in d.columns:
+        g = pd.DataFrame({"matchup": d["matchup"]})
+        g["ML pick"] = np.where(d["p_home"] > 0.5, d["home_team"], d["away_team"])
+        g["win%"] = np.maximum(d["p_home"], 1 - d["p_home"])
+        if "pred_spread" in d.columns:
+            g["spread"] = d["pred_spread"]
+            g["line"] = d["vegas_spread"]
+            g["edge"] = d["pred_spread"] - d["vegas_spread"]
+            g["ATS side"] = np.where(
+                d["pred_spread"] > d["vegas_spread"], d["home_team"], d["away_team"]
+            )
+        if "pred_total" in d.columns:
+            g["total"] = d["pred_total"]
+            g["o/u line"] = d["vegas_total"]
+            g["O/U"] = np.where(d["pred_total"] > d["vegas_total"], "OVER", "UNDER")
+        blocks.append("FULL GAME\n" + _fmt(g, pct=["win%"],
+                                           signed=["spread", "line", "edge"],
+                                           plain=["total", "o/u line"]))
+
+    # --- halftime --------------------------------------------------------
+    h1_cols = [c for c in ("p_home_h1", "pred_h1_spread", "pred_h1_total") if c in d.columns]
+    if h1_cols:
+        h = pd.DataFrame({"matchup": d["matchup"]})
+        if "p_home_h1" in d.columns:
+            h["H1 leader"] = np.where(d["p_home_h1"] > 0.5, d["home_team"], d["away_team"])
+            h["lead%"] = np.maximum(d["p_home_h1"], 1 - d["p_home_h1"])
+        if "pred_h1_spread" in d.columns:
+            h["H1 margin"] = d["pred_h1_spread"]
+        if "pred_h1_total" in d.columns:
+            h["H1 total"] = d["pred_h1_total"]
+        blocks.append(
+            "HALFTIME   (no market line exists for these - unbenchmarked)\n"
+            + _fmt(h, pct=["lead%"], signed=["H1 margin"], plain=["H1 total"])
+        )
+
+    return "\n\n".join(blocks)
+
+
+def _fmt(df: pd.DataFrame, pct=(), signed=(), plain=()) -> str:
+    out = df.copy()
+    for c in pct:
+        if c in out.columns:
+            out[c] = out[c].map(lambda v: f"{v:.3f}" if pd.notna(v) else "-")
+    for c in signed:
+        if c in out.columns:
+            out[c] = out[c].map(lambda v: f"{v:+.1f}" if pd.notna(v) else "-")
+    for c in plain:
+        if c in out.columns:
+            out[c] = out[c].map(lambda v: f"{v:.1f}" if pd.notna(v) else "-")
+    return out.to_string(index=False)

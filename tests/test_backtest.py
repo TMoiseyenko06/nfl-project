@@ -10,11 +10,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from nflpred.backtest.metrics import ats_record, evaluate
+from nflpred.backtest.metrics import ats_record, evaluate, evaluate_target
 from nflpred.backtest.walkforward import folds, run_backtest, summarize
 from nflpred.config import Config
 from nflpred.features.build import build_features
 from nflpred.models.registry import BaseModel, HomeTeamBaseline, Predictions, VegasBaseline
+from nflpred.models.targets import TARGETS
 
 
 @pytest.fixture(scope="module")
@@ -34,6 +35,7 @@ class SpyModel(BaseModel):
     groups: list[str] = []
 
     def __init__(self):
+        super().__init__(["win"])
         self.folds: list[dict] = []
 
     def fit(self, train, features):
@@ -49,7 +51,9 @@ class SpyModel(BaseModel):
     def predict(self, test, features):
         self.folds[-1]["min_test_kickoff"] = test["kickoff"].min()
         self.folds[-1]["test_game_ids"] = set(test["game_id"])
-        return Predictions(p_home=np.full(len(test), 0.5))
+        p = Predictions()
+        p.set(TARGETS["win"], np.full(len(test), 0.5))
+        return p
 
 
 def test_folds_are_chronological_and_start_where_configured(df, cfg):
@@ -90,16 +94,37 @@ def test_backtest_smoke_produces_scored_predictions(df, cfg):
     assert preds["game_id"].nunique() > 1500
 
     tab = summarize(preds, cfg, model_order=["home_team", "vegas"])
-    assert len(tab) == 2
-    home = tab[tab.model == "home_team"].iloc[0]
-    vegas = tab[tab.model == "vegas"].iloc[0]
+    win = tab[tab["target"] == "win"].set_index("model")
+    spread = tab[tab["target"] == "spread"].set_index("model")
 
     # Sanity anchors: home-field is worth roughly 54-56%, and the market must
     # beat it comfortably. If either breaks, something upstream is wrong.
-    assert 0.52 < home["accuracy"] < 0.58, home["accuracy"]
-    assert 0.63 < vegas["accuracy"] < 0.70, vegas["accuracy"]
-    assert vegas["accuracy"] > home["accuracy"]
-    assert vegas["spread_mae"] < home["spread_mae"]
+    assert 0.52 < win.loc["home_team", "accuracy"] < 0.58
+    assert 0.63 < win.loc["vegas", "accuracy"] < 0.70
+    assert win.loc["vegas", "accuracy"] > win.loc["home_team", "accuracy"]
+    assert spread.loc["vegas", "mae"] < spread.loc["home_team", "mae"]
+
+    # Halftime targets must be scored too, and a first half must average about
+    # half a full game's points.
+    h1 = tab[tab["target"] == "h1_total"].set_index("model")
+    assert not h1.empty, "halftime targets were not scored"
+    # A constant predictor's MAE is the mean absolute deviation, ~0.8*sigma.
+    # Halftime total sigma is ~9.1, so ~7.2 is the expected value here.
+    assert 6.0 < h1.loc["home_team", "mae"] < 9.0, h1.loc["home_team", "mae"]
+    full = tab[tab["target"] == "total"].set_index("model")
+    assert h1.loc["home_team", "mae"] < full.loc["home_team", "mae"], \
+        "halftime totals should be easier to predict than full-game totals"
+
+
+def test_halftime_targets_are_derivable_and_sane(df):
+    """Halftime targets must exist, be smaller than full-game, and never exceed it."""
+    played = df[df["played"] & df["h1_total_actual"].notna()]
+    assert len(played) > 2500
+    assert played["h1_total_actual"].mean() < played["total_actual"].mean()
+    assert (played["h1_total_actual"] <= played["total_actual"]).all(), \
+        "a halftime score exceeded the final score"
+    assert (played["h1_home_score"] <= played["home_score"]).all()
+    assert (played["h1_away_score"] <= played["away_score"]).all()
 
 
 def test_vegas_against_its_own_line_is_a_coin_flip(df, cfg):
@@ -108,7 +133,7 @@ def test_vegas_against_its_own_line_is_a_coin_flip(df, cfg):
     This is the strongest available check that the ATS accounting has no sign
     error - a flipped comparison would show up as a wild number here.
     """
-    preds = run_backtest(df, [VegasBaseline()], cfg, verbose=False)
+    preds = run_backtest(df, [VegasBaseline(["spread"])], cfg, verbose=False)
     rec = ats_record(preds["pred_spread"], preds["spread_actual"], preds["vegas_spread"])
     # Predicted spread equals the line, so every pick is a coin flip by
     # construction: ats_pct is whatever the tie-break rule yields, but the
@@ -128,9 +153,11 @@ def test_evaluate_handles_missing_targets_gracefully():
         "vegas_total": [44.0, 40.0, 49.0],
         "p_home": [0.6, 0.4, 0.55],
     })
-    m = evaluate(d)
-    assert "accuracy" in m and "spread_mae" not in m
-    assert m["n_games"] == 3
+    m = {r["target"]: r for r in evaluate(d, specs=["win", "spread"])}
+    assert "accuracy" in m["win"]
+    assert m["win"]["n_games"] == 3
+    # spread has no prediction column here, so it scores nothing.
+    assert m["spread"].get("n_games", 0) == 0
 
 
 def test_ties_are_excluded_from_classification_metrics():
@@ -142,7 +169,7 @@ def test_ties_are_excluded_from_classification_metrics():
         "vegas_total": [44.0, 40.0, 41.0],
         "p_home": [0.9, 0.1, 0.5],
     })
-    m = evaluate(d)
+    m = evaluate_target(d, TARGETS["win"])
     assert m["n_games"] == 3
-    assert m["n_cls"] == 2
+    assert m["n_scored"] == 2, "the tie was not excluded"
     assert m["accuracy"] == pytest.approx(1.0)

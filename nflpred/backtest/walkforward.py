@@ -15,9 +15,10 @@ import time
 import numpy as np
 import pandas as pd
 
-from nflpred.backtest.metrics import evaluate
+from nflpred.backtest.metrics import evaluate_target
 from nflpred.config import Config
 from nflpred.features.build import select_features
+from nflpred.models.targets import resolve
 
 log = logging.getLogger(__name__)
 
@@ -86,8 +87,9 @@ def run_backtest(
             rec["week"] = week
             rec["kickoff"] = test["kickoff"].to_numpy()
             rec["n_train"] = len(train)
-            for c in ("home_win", "spread_actual", "total_actual", "vegas_spread",
-                      "vegas_total", "home_team", "away_team", "game_type"):
+            carry = ["home_team", "away_team", "game_type", "vegas_spread", "vegas_total"]
+            carry += [s.column for s in resolve(None) if s.column in test.columns]
+            for c in carry:
                 rec[c] = test[c].to_numpy()
             records.append(rec)
 
@@ -102,53 +104,68 @@ def run_backtest(
     return out
 
 
-def summarize(preds: pd.DataFrame, cfg: Config, model_order: list[str] | None = None) -> pd.DataFrame:
-    """Comparison table: one row per model, always reported together."""
+def summarize(preds: pd.DataFrame, cfg: Config, model_order: list[str] | None = None,
+              targets: list[str] | None = None) -> pd.DataFrame:
+    """Comparison table: one row per (target, model), always reported together."""
     breakeven = cfg.get("evaluation.ats_breakeven", 0.5238)
-    rows = []
     names = model_order or list(dict.fromkeys(preds["model"]))
-    for name in names:
-        d = preds[preds["model"] == name]
-        if d.empty:
-            continue
-        m = evaluate(d, ats_breakeven=breakeven)
-        m["model"] = name
-        rows.append(m)
-    cols = [
-        "model", "n_games", "accuracy", "log_loss", "brier", "ece",
-        "spread_mae", "spread_rmse", "ats_pct", "ats_n", "ats_units",
-        "total_mae", "total_rmse", "ou_pct",
-    ]
+    rows = []
+    for spec in resolve(targets):
+        for name in names:
+            d = preds[preds["model"] == name]
+            if d.empty:
+                continue
+            m = evaluate_target(d, spec, breakeven)
+            if m.get("n_games", 0) == 0:
+                continue
+            m["model"] = name
+            rows.append(m)
     tab = pd.DataFrame(rows)
+    if tab.empty:
+        return tab
+    cols = ["target", "model", "n_games", "accuracy", "log_loss", "brier", "ece",
+            "mae", "rmse", "ats_pct", "ats_n", "ats_units", "ou_pct"]
     return tab[[c for c in cols if c in tab.columns]]
 
 
 def format_table(tab: pd.DataFrame, breakeven: float = 0.5238) -> str:
-    """Human-readable comparison table for the terminal and the README."""
-    t = tab.copy()
-    fmt = {
-        "accuracy": "{:.4f}", "log_loss": "{:.4f}", "brier": "{:.4f}", "ece": "{:.4f}",
-        "spread_mae": "{:.3f}", "spread_rmse": "{:.3f}", "ats_pct": "{:.4f}",
-        "ats_units": "{:+.1f}", "total_mae": "{:.3f}", "total_rmse": "{:.3f}",
-        "ou_pct": "{:.4f}",
-    }
-    for c, f in fmt.items():
-        if c in t.columns:
-            t[c] = t[c].map(lambda v: f.format(v) if pd.notna(v) else "-")
-    lines = [t.to_string(index=False)]
-    lines.append("")
-    lines.append(f"ATS break-even at standard -110 juice: {breakeven:.4f}")
-    return "\n".join(lines)
+    """Human-readable comparison table, grouped by target."""
+    from nflpred.models.targets import TARGETS
+
+    if tab.empty:
+        return "(no results)"
+    fmt = {"accuracy": "{:.4f}", "log_loss": "{:.4f}", "brier": "{:.4f}", "ece": "{:.4f}",
+           "mae": "{:.3f}", "rmse": "{:.3f}", "ats_pct": "{:.4f}", "ats_units": "{:+.1f}",
+           "ou_pct": "{:.4f}"}
+    blocks = []
+    for target in tab["target"].drop_duplicates():
+        t = tab[tab["target"] == target].drop(columns=["target"]).copy()
+        t = t.dropna(axis=1, how="all")
+        for c, f in fmt.items():
+            if c in t.columns:
+                t[c] = t[c].map(lambda v: f.format(v) if pd.notna(v) else "-")
+        spec = TARGETS.get(target)
+        label = spec.label if spec else target
+        market = "" if (spec and spec.market_column) else "   [no market benchmark exists]"
+        blocks.append(f"--- {target}: {label}{market} ---\n" + t.to_string(index=False))
+    out = "\n\n".join(blocks)
+    return out + f"\n\nATS break-even at standard -110 juice: {breakeven:.4f}"
 
 
-def by_season(preds: pd.DataFrame, cfg: Config) -> pd.DataFrame:
+def by_season(preds: pd.DataFrame, cfg: Config, targets: list[str] | None = None) -> pd.DataFrame:
     """Per-season breakdown - a single aggregate hides a lot of variance."""
+    breakeven = cfg.get("evaluation.ats_breakeven", 0.5238)
     rows = []
-    for (name, season), d in preds.groupby(["model", "season"]):
-        m = evaluate(d, ats_breakeven=cfg.get("evaluation.ats_breakeven", 0.5238))
-        m["model"] = name
-        m["season"] = season
-        rows.append(m)
+    for spec in resolve(targets):
+        for (name, season), d in preds.groupby(["model", "season"]):
+            m = evaluate_target(d, spec, breakeven)
+            if m.get("n_games", 0) == 0:
+                continue
+            m["model"] = name
+            m["season"] = season
+            rows.append(m)
     tab = pd.DataFrame(rows)
-    cols = ["model", "season", "n_games", "accuracy", "log_loss", "spread_mae", "ats_pct"]
-    return tab[[c for c in cols if c in tab.columns]].sort_values(["model", "season"])
+    if tab.empty:
+        return tab
+    cols = ["target", "model", "season", "n_games", "accuracy", "log_loss", "mae", "ats_pct"]
+    return tab[[c for c in cols if c in tab.columns]].sort_values(["target", "model", "season"])

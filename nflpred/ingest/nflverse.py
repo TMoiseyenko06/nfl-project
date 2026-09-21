@@ -129,6 +129,8 @@ PBP_COLUMNS = [
     "yards_gained", "penalty", "special", "sack", "interception", "fumble_lost",
     "touchdown", "first_down", "air_yards", "series_success", "drive",
     "shotgun", "no_huddle", "wp",
+    # Required for the halftime targets (features/targets.py).
+    "game_half", "total_home_score", "total_away_score",
 ]
 
 

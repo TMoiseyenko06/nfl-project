@@ -149,6 +149,59 @@ production.
 
 ---
 
+## What it predicts
+
+Six targets, all from the same pre-kickoff feature set, all backtested the same way:
+
+| target | what it is | market benchmark |
+|---|---|---|
+| `win` | moneyline / win probability | yes (line → probability) |
+| `spread` | final margin (home perspective) | yes (closing line) |
+| `total` | final total points | yes (closing total) |
+| `h1_win` | leading at halftime | **no** |
+| `h1_spread` | halftime margin | **no** |
+| `h1_total` | halftime total points | **no** |
+
+Adding a market means adding a `TargetSpec` in `nflpred/models/targets.py`;
+the models, backtester and metrics all iterate over that registry rather than
+hardcoding targets.
+
+### Halftime targets
+
+Halftime scores are not in the schedule file — they are derived from
+play-by-play. The subtlety worth knowing about: **`total_home_score` holds the
+score *after* the play it sits on.** So the obvious approach — read the first
+play of the second half — silently folds in anything scored on the opening
+kickoff of the second half. One 2024 game has a 100-yard kickoff return
+touchdown there, which would have put 6 phantom points into the halftime score.
+
+The correct rule is the maximum over first-half plays, which is also robust to
+play ordering since a score never decreases. Validated by applying the same
+rule to the whole game: it reproduces the official final score for **all 3,052
+games** in the dataset.
+
+> **Halftime has no market benchmark.** nflverse carries no halftime lines, so
+> there is nothing to check halftime predictions against except the naive
+> baselines. The `vegas` row for halftime targets is a *derived* benchmark —
+> a fitted map from the full-game line to the halftime outcome — and is
+> labelled as derived everywhere it appears. Treat halftime numbers as
+> "better than guessing", not as "beats the market", because there is no
+> market here to beat.
+
+### Coherent win probability
+
+Fitting the moneyline as its own classifier lets it contradict the spread
+model: LightGBM's moneyline pick disagreed with its own spread pick on
+**12.7%** of out-of-sample games. That is incoherent in output a human reads.
+
+The `*_coherent` models instead derive the probability from the predicted
+margin, via a single-parameter logistic `P = sigmoid(b · margin)` fit on the
+training fold. With **no intercept** the curve crosses 0.5 exactly at margin
+zero, so the two can never disagree — coherence by construction, not by
+tuning. Disagreement drops to 0.0%.
+
+---
+
 ## Features
 
 Built in tiers. Tier 1 only, so far.
@@ -247,6 +300,12 @@ produced from a vintage that fails the audit does not get written.
 ---
 
 ## Phase 1 results
+
+> **Note:** the table below is the original **three-target, seven-model** run
+> (win / spread / total). The halftime targets and the `*_coherent` models were
+> added afterwards and are being re-backtested across all six targets; this
+> section will be replaced with those numbers. The conclusions below still
+> hold for the models they describe.
 
 Walk-forward out-of-sample, **2,524 games** (2017 wk1 – 2026 wk2), 196 folds,
 refit every week. Data vintage `e1e882d2217b`.
@@ -361,6 +420,32 @@ is the first thing I would cut.
    model (Elo + opponent-adjusted net + rest/travel) before adding anything.
 4. **Model the spread directly and derive the win probability from it**, rather
    than fitting a separate classifier. Margin is the richer target.
+
+### Player props — assessed, not built
+
+The data exists and is good: `stats_player_week` carries ~19,000 player-weeks
+per season (~200,000 across 2015–2026) with passing/rushing/receiving yards,
+receptions, targets, carries, touchdowns, target share and air-yards share.
+
+That is a **fundamentally better sample-size regime than game prediction** —
+200,000 rows instead of 3,000 — which is the single strongest argument for
+building it. It is also where sportsbooks are least sharp, because they post
+thousands of prop lines with far less attention per line than the main markets.
+
+Two real obstacles, neither fatal:
+
+1. **Usage has to be projected before production can be.** A receiver's yards
+   depend mostly on whether he plays and how many snaps and targets he gets.
+   That needs the injury report, depth charts and snap counts — all free in
+   nflverse, all currently unused by this repo.
+2. **No free prop lines.** Same problem as halftime, but it bites harder here:
+   props are interesting precisely *because* the lines may be soft, and
+   without the lines there is no way to measure whether an edge exists. The
+   model can be scored on raw accuracy (MAE on receiving yards, say), but
+   "beats the book" would be unverifiable.
+
+So props are worth building as a *projection* system, and the honest framing
+is that its value would be measurable in MAE and calibration, not in ATS.
 
 ### Skeptical of
 - **Any model given `vegas_*` features.** It is anchoring on the closing line

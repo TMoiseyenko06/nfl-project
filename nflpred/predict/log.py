@@ -24,11 +24,18 @@ import pandas as pd
 
 log = logging.getLogger(__name__)
 
-PRED_FIELDS = [
-    "logged_at", "vintage", "model", "game_id", "season", "week", "kickoff",
-    "home_team", "away_team", "p_home", "pred_spread", "pred_total",
-    "vegas_spread", "vegas_total",
-]
+def _pred_fields() -> list[str]:
+    from nflpred.models.targets import prediction_columns
+
+    return (
+        ["logged_at", "vintage", "model", "game_id", "season", "week", "kickoff",
+         "home_team", "away_team"]
+        + prediction_columns()
+        + ["vegas_spread", "vegas_total"]
+    )
+
+
+PRED_FIELDS = _pred_fields()
 
 
 def _row_hash(row: pd.Series) -> str:
@@ -142,9 +149,10 @@ def score_logged_predictions(
         log.warning("no predictions logged yet")
         return pd.DataFrame()
 
-    actual = features[features["played"]][
-        ["game_id", "home_win", "spread_actual", "total_actual"]
-    ]
+    from nflpred.models.targets import resolve
+
+    target_cols = [t.column for t in resolve(None) if t.column in features.columns]
+    actual = features[features["played"]][["game_id", "vegas_spread", "vegas_total"] + target_cols]
     joined = df.merge(actual, on="game_id", how="inner")
     honest = joined[joined["logged_before_kickoff"]]
     if len(honest) < len(joined):
@@ -159,19 +167,22 @@ def score_logged_predictions(
     rows = []
     scored_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     for (model, season, week), d in honest.groupby(["model", "season", "week"]):
-        m = evaluate(d, ats_breakeven=cfg.get("evaluation.ats_breakeven", 0.5238))
-        m.update({"scored_at": scored_at, "model": model, "season": int(season), "week": int(week)})
-        rows.append(m)
+        for m in evaluate(d, ats_breakeven=cfg.get("evaluation.ats_breakeven", 0.5238)):
+            if not m.get("n_games"):
+                continue
+            m.update({"scored_at": scored_at, "model": model,
+                      "season": int(season), "week": int(week)})
+            rows.append(m)
     perf = pd.DataFrame(rows)
 
     perf_path = Path(perf_path)
     perf_path.parent.mkdir(parents=True, exist_ok=True)
     if perf_path.exists():
         prev = pd.read_csv(perf_path)
-        key = ["model", "season", "week"]
+        key = ["model", "season", "week", "target"]
         prev = prev[~prev.set_index(key).index.isin(perf.set_index(key).index)]
         perf = pd.concat([prev, perf], ignore_index=True)
-    perf = perf.sort_values(["season", "week", "model"])
+    perf = perf.sort_values(["season", "week", "target", "model"])
     perf.to_csv(perf_path, index=False)
     log.info("scored %d model-week(s) -> %s", len(rows), perf_path)
     return perf
